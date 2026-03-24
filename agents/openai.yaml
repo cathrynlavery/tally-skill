@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tally"
+  short_description: "Manage Tally forms and submissions via CLI"
+  default_prompt: "Use $tally to create forms, manage webhooks, and export submissions."
