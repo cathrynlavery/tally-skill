@@ -43,6 +43,13 @@ FIELD_TYPE_TO_BLOCK = {
     "rating": "RATING",
 }
 
+# Choice types: label=choice:opt1/opt2/opt3 or label=dropdown:opt1/opt2
+CHOICE_TYPE_TO_BLOCK = {
+    "choice": ("MULTIPLE_CHOICE_OPTION", "MULTIPLE_CHOICE"),
+    "dropdown": ("DROPDOWN_OPTION", "DROPDOWN"),
+    "checkbox": ("CHECKBOX", "CHECKBOXES"),
+}
+
 _TOKEN_CACHE: Optional[Tuple[str, str]] = None
 
 
@@ -396,13 +403,30 @@ def _parse_simple_fields(raw: str) -> List[Tuple[str, str]]:
                 fix="Field labels cannot be empty.",
             )
 
-        if field_type not in FIELD_TYPE_TO_BLOCK:
+        # Check for choice types: choice:opt1/opt2/opt3
+        choice_prefix = None
+        for cp in CHOICE_TYPE_TO_BLOCK:
+            if field_type.startswith(cp + ":"):
+                choice_prefix = cp
+                break
+
+        if choice_prefix:
+            options_str = field_type[len(choice_prefix) + 1:]
+            options = [o.strip() for o in options_str.split("/") if o.strip()]
+            if len(options) < 2:
+                raise CliError(
+                    f"Choice field '{label}' needs at least 2 options separated by /",
+                    fix=f"Example: {label}={choice_prefix}:Yes/No/Maybe",
+                )
+            parsed.append((label, field_type))
+        elif field_type not in FIELD_TYPE_TO_BLOCK:
+            all_types = sorted(FIELD_TYPE_TO_BLOCK.keys()) + ["choice:a/b/c", "dropdown:a/b/c", "checkbox:a/b/c"]
             raise CliError(
                 f"Unsupported field type '{field_type}'",
-                fix="Allowed types: " + ", ".join(sorted(FIELD_TYPE_TO_BLOCK.keys())),
+                fix="Allowed types: " + ", ".join(all_types),
             )
-
-        parsed.append((label, field_type))
+        else:
+            parsed.append((label, field_type))
 
     return parsed
 
@@ -412,9 +436,14 @@ def _safe_html_schema(text: str) -> List[Any]:
 
 
 def _simple_question_blocks(label: str, field_type: str) -> List[Dict[str, Any]]:
-    block_type = FIELD_TYPE_TO_BLOCK[field_type]
-    question_group_uuid = str(uuid.uuid4())
+    # Check if this is a choice type
+    choice_prefix = None
+    for cp in CHOICE_TYPE_TO_BLOCK:
+        if field_type.startswith(cp + ":"):
+            choice_prefix = cp
+            break
 
+    question_group_uuid = str(uuid.uuid4())
     title_block = {
         "uuid": str(uuid.uuid4()),
         "type": "TITLE",
@@ -423,6 +452,31 @@ def _simple_question_blocks(label: str, field_type: str) -> List[Dict[str, Any]]
         "payload": {"safeHTMLSchema": _safe_html_schema(label)},
     }
 
+    if choice_prefix:
+        options_str = field_type[len(choice_prefix) + 1:]
+        options = [o.strip() for o in options_str.split("/") if o.strip()]
+        option_block_type, group_type = CHOICE_TYPE_TO_BLOCK[choice_prefix]
+        option_group_uuid = str(uuid.uuid4())
+
+        option_blocks: List[Dict[str, Any]] = []
+        for i, opt in enumerate(options):
+            option_blocks.append({
+                "uuid": str(uuid.uuid4()),
+                "type": option_block_type,
+                "groupUuid": option_group_uuid,
+                "groupType": group_type,
+                "payload": {
+                    "index": i,
+                    "isRequired": False,
+                    "isFirst": i == 0,
+                    "isLast": i == len(options) - 1,
+                    "text": opt,
+                },
+            })
+        return [title_block] + option_blocks
+
+    # Scalar field type
+    block_type = FIELD_TYPE_TO_BLOCK[field_type]
     input_payload: Dict[str, Any] = {}
     if block_type == "RATING":
         input_payload = {"stars": 5}
