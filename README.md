@@ -1,15 +1,14 @@
 # tally-skill
 
-Agent-first CLI for the [Tally](https://lttlmg.ht/tallyforms) REST API. Create forms, export submissions, manage webhooks — all from the command line with structured JSON output designed for AI agent chaining.
+Your AI agent shouldn't need a browser to create a form, pull survey results, or wire up a webhook. This CLI gives it 18 commands to manage [Tally](https://lttlmg.ht/tallyforms) forms programmatically — create multi-page surveys from the terminal, export submissions as safe CSV, and pipe form data into any pipeline.
 
-**Zero dependencies.** Pure Python stdlib. Works with Claude Code, Codex, or any agent that can run shell commands.
+**Zero dependencies.** Pure Python stdlib. One `git clone` to install. Structured JSON output every agent can parse.
 
 ## Install
 
 ### As a Claude Code skill
 
 ```bash
-# Clone into your skills directory
 git clone https://github.com/cathrynlavery/tally-skill.git ~/.claude/skills/tally
 ```
 
@@ -40,19 +39,60 @@ python3 scripts/tally.py health
 # List your forms
 python3 scripts/tally.py form list
 
-# Create a form with the simple DSL
+# Create a survey with text, multiple choice, and rating fields — one command
 python3 scripts/tally.py form create-simple \
   --name "Customer Feedback" \
-  --fields "Name=text,Email=email,Rating=rating,Comments=textarea"
+  --fields "Name=text,Email=email,How did you find us?=choice:Google/Twitter/Friend/Other,Rating=rating,Comments=textarea"
 
-# Export submissions as CSV
+# Export submissions as CSV (formula-injection safe)
 python3 scripts/tally.py submission export \
   --form-id <id> --format csv --output feedback.csv --all
 
-# Set up a webhook
+# Set up a webhook to pipe new submissions somewhere
 python3 scripts/tally.py webhook create \
   --form-id <id> --url https://example.com/webhook
 ```
+
+## Create Forms from the Terminal
+
+### One-liner (simple DSL)
+
+```bash
+tally form create-simple \
+  --name "Event Registration" \
+  --fields "Name=text,Email=email,Company=text,Dietary needs=dropdown:None/Vegetarian/Vegan/Gluten-free,Topics=checkbox:AI/Marketing/Product/Engineering"
+```
+
+Supported field types: `text`, `email`, `number`, `phone`, `date`, `time`, `url`, `textarea`, `file`, `rating`, `choice:a/b/c`, `dropdown:a/b/c`, `checkbox:a/b/c`
+
+### Multi-page forms (simplified JSON)
+
+For forms with page breaks, headings, and mixed field types, use a blocks file. No UUIDs needed — they're auto-generated:
+
+```json
+{
+  "status": "DRAFT",
+  "blocks": [
+    {"type": "FORM_TITLE", "title": "Job Application"},
+    {"type": "text", "label": "Full Name", "required": true},
+    {"type": "email", "label": "Email", "required": true},
+    {"type": "PAGE_BREAK"},
+    {"type": "HEADING", "text": "About You"},
+    {"type": "choice", "label": "Department", "options": ["Engineering", "Marketing", "Design"]},
+    {"type": "textarea", "label": "Why do you want to join?", "required": true},
+    {"type": "PAGE_BREAK"},
+    {"type": "dropdown", "label": "Experience", "options": ["0-1 years", "2-4", "5-9", "10+"]},
+    {"type": "rating", "label": "How excited are you?"},
+    {"type": "file", "label": "Upload resume"}
+  ]
+}
+```
+
+```bash
+tally form create --blocks-file application.json
+```
+
+See [references/form_templates.md](references/form_templates.md) for more templates.
 
 ## Commands
 
@@ -70,8 +110,8 @@ python3 scripts/tally.py webhook create \
 |---------|-------------|
 | `tally form list` | List forms (supports `--workspace-id`, `--all`) |
 | `tally form get --id <id>` | Get form details with blocks |
-| `tally form create-simple --name "..." --fields "..."` | Create form from `label=type` DSL |
-| `tally form create --blocks-file <path>` | Create form from JSON block definitions |
+| `tally form create-simple --name "..." --fields "..."` | Create form from DSL |
+| `tally form create --blocks-file <path>` | Create form from JSON (simplified or raw) |
 | `tally form update --id <id>` | Update name, status, or blocks |
 | `tally form delete --id <id>` | Delete form (moves to trash) |
 | `tally form questions --id <id>` | List form questions |
@@ -102,70 +142,33 @@ python3 scripts/tally.py webhook create \
 | `tally workspace list` | List workspaces |
 | `tally workspace get --id <id>` | Get workspace details |
 
-## Simple Form DSL
-
-The `create-simple` command uses a `label=type` grammar for quick form creation:
-
-```
---fields "Full Name=text,Email=email,Comments=textarea,Rating=rating"
-```
-
-Supported types: `text`, `email`, `number`, `phone`, `date`, `time`, `url`, `textarea`, `file`, `rating`
-
-For complex forms with choice fields, conditional logic, or custom payloads, use `--blocks-file` with a JSON file. See [references/form_templates.md](references/form_templates.md) for examples.
-
 ## Agent-First JSON Output
 
-Every command returns a structured JSON envelope:
+Every command returns structured JSON with `next_actions` your agent can chain:
 
 ```json
 {
   "ok": true,
-  "command": "tally form list",
-  "timestamp": "2026-03-24T14:22:01Z",
-  "result": { "forms": [...], "hasMore": true },
+  "command": "tally form create-simple ...",
+  "result": { "form": {"id": "abc123"}, "fieldCount": 5 },
   "next_actions": [
-    { "command": "tally form list --page 2", "description": "Next page" },
-    { "command": "tally form get --id abc123", "description": "View details" }
+    { "command": "tally webhook create --form-id abc123 --url ...", "description": "Set up webhook" },
+    { "command": "tally submission list --form-id abc123", "description": "Check for submissions" }
   ]
 }
 ```
 
-Errors include `http_status`, `retryable`, `fix` guidance, and `next_actions`:
-
-```json
-{
-  "ok": false,
-  "error": { "message": "Form not found", "http_status": 404 },
-  "retryable": false,
-  "fix": "Run `tally form list` to find valid form IDs"
-}
-```
+Errors include `http_status`, `retryable`, and `fix` guidance so agents can self-correct.
 
 ## Security
 
-- API keys are never printed in full (redacted to `tly-...xx`)
+- API keys never printed in full (redacted to `tly-...xx`)
 - CSV exports sanitize formula injection (`=`, `+`, `-`, `@`, tab, CR)
-- Webhook `signingSecret` is redacted from all output
+- Webhook `signingSecret` redacted from all output
 - Secrets passed via `--signing-secret-env` (env var name, not the value)
-- File paths validated before read/write operations
-- Rate limit retry with exponential backoff + jitter (100 req/min limit)
-- Auto-pagination capped at 200 pages to prevent runaway requests
-
-## Project Structure
-
-```
-tally-skill/
-├── SKILL.md                    # Claude Code skill definition
-├── README.md                   # This file
-├── scripts/
-│   └── tally.py                # CLI implementation (stdlib only, ~1500 lines)
-├── references/
-│   ├── api_reference.md        # Endpoint map and payload notes
-│   └── form_templates.md       # Reusable form patterns
-└── agents/
-    └── openai.yaml             # Agent UI metadata
-```
+- File paths validated before read/write
+- Rate limit retry with exponential backoff + jitter
+- Auto-pagination capped at 200 pages
 
 ## API Coverage
 
@@ -176,6 +179,10 @@ Wraps the [Tally REST API](https://developers.tally.so/api-reference/introductio
 - Submissions: list, get, delete, export (CSV/JSON)
 - Webhooks: create, list, delete, events, retry
 - Workspaces: list, get
+
+## Built by
+
+[Cathryn Lavery](https://x.com/cathrynlavery) — Founder of [BestSelf Co](https://bestself.co) ($55M+ bootstrapped). Sold to PE in 2022. Bought it back in 2024. Now becoming AI-native and documenting the journey at [founder.codes](https://founder.codes).
 
 ## License
 

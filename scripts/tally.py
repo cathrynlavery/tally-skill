@@ -513,6 +513,152 @@ def _build_simple_form_blocks(name: str, fields: List[Tuple[str, str]]) -> List[
     return blocks
 
 
+def _is_simplified_block(block: Dict[str, Any]) -> bool:
+    """Detect simplified format: has 'label' or 'title' key, or type is lowercase/shorthand."""
+    if "label" in block or "title" in block or "options" in block:
+        return True
+    block_type = block.get("type", "")
+    if block_type in FIELD_TYPE_TO_BLOCK or block_type in CHOICE_TYPE_TO_BLOCK:
+        return True
+    if block_type in ("FORM_TITLE", "PAGE_BREAK", "HEADING", "TEXT_BLOCK"):
+        if "uuid" not in block:
+            return True
+    return False
+
+
+def _expand_simplified_block(block: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Convert a simplified block dict into real Tally block(s)."""
+    block_type = block.get("type", "")
+    label = block.get("label", "")
+    required = block.get("required", False)
+    options = block.get("options", [])
+
+    if block_type == "FORM_TITLE":
+        title = block.get("title", "Untitled Form")
+        group_uuid = str(uuid.uuid4())
+        return [{
+            "uuid": str(uuid.uuid4()),
+            "type": "FORM_TITLE",
+            "groupUuid": group_uuid,
+            "groupType": "TEXT",
+            "payload": {"title": title, "safeHTMLSchema": _safe_html_schema(title)},
+        }]
+
+    if block_type == "PAGE_BREAK":
+        group_uuid = str(uuid.uuid4())
+        return [{
+            "uuid": str(uuid.uuid4()),
+            "type": "PAGE_BREAK",
+            "groupUuid": group_uuid,
+            "groupType": "PAGE_BREAK",
+            "payload": {},
+        }]
+
+    if block_type == "HEADING" or block_type == "HEADING_3":
+        text = block.get("text", label)
+        group_uuid = str(uuid.uuid4())
+        return [{
+            "uuid": str(uuid.uuid4()),
+            "type": "HEADING_3",
+            "groupUuid": group_uuid,
+            "groupType": "TEXT",
+            "payload": {"safeHTMLSchema": _safe_html_schema(text)},
+        }]
+
+    if block_type == "TEXT_BLOCK":
+        text = block.get("text", "")
+        group_uuid = str(uuid.uuid4())
+        return [{
+            "uuid": str(uuid.uuid4()),
+            "type": "TEXT",
+            "groupUuid": group_uuid,
+            "groupType": "TEXT",
+            "payload": {"safeHTMLSchema": _safe_html_schema(text)},
+        }]
+
+    # Choice types with options array
+    if block_type in CHOICE_TYPE_TO_BLOCK and options:
+        option_block_type, group_type = CHOICE_TYPE_TO_BLOCK[block_type]
+        question_group_uuid = str(uuid.uuid4())
+        title_block = {
+            "uuid": str(uuid.uuid4()),
+            "type": "TITLE",
+            "groupUuid": question_group_uuid,
+            "groupType": "QUESTION",
+            "payload": {"safeHTMLSchema": _safe_html_schema(label)},
+        }
+        option_group_uuid = str(uuid.uuid4())
+        option_blocks = []
+        for i, opt in enumerate(options):
+            option_blocks.append({
+                "uuid": str(uuid.uuid4()),
+                "type": option_block_type,
+                "groupUuid": option_group_uuid,
+                "groupType": group_type,
+                "payload": {
+                    "index": i,
+                    "isRequired": required,
+                    "isFirst": i == 0,
+                    "isLast": i == len(options) - 1,
+                    "text": opt,
+                },
+            })
+        return [title_block] + option_blocks
+
+    # Scalar field types
+    if block_type in FIELD_TYPE_TO_BLOCK:
+        tally_type = FIELD_TYPE_TO_BLOCK[block_type]
+        question_group_uuid = str(uuid.uuid4())
+        title_block = {
+            "uuid": str(uuid.uuid4()),
+            "type": "TITLE",
+            "groupUuid": question_group_uuid,
+            "groupType": "QUESTION",
+            "payload": {"safeHTMLSchema": _safe_html_schema(label)},
+        }
+        input_payload: Dict[str, Any] = {}
+        if required:
+            input_payload["isRequired"] = True
+        if tally_type == "RATING":
+            input_payload["stars"] = block.get("stars", 5)
+        if block.get("placeholder"):
+            input_payload["placeholder"] = block["placeholder"]
+        input_block = {
+            "uuid": str(uuid.uuid4()),
+            "type": tally_type,
+            "groupUuid": str(uuid.uuid4()),
+            "groupType": tally_type,
+            "payload": input_payload,
+        }
+        return [title_block, input_block]
+
+    raise CliError(
+        f"Unknown simplified block type '{block_type}'",
+        fix="Supported types: " + ", ".join(
+            sorted(list(FIELD_TYPE_TO_BLOCK.keys()) + list(CHOICE_TYPE_TO_BLOCK.keys())
+                   + ["FORM_TITLE", "PAGE_BREAK", "HEADING", "TEXT_BLOCK"])
+        ),
+    )
+
+
+def _preprocess_blocks(raw_blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """If blocks use simplified format, expand them. Otherwise pass through."""
+    if not raw_blocks:
+        return raw_blocks
+
+    has_simplified = any(_is_simplified_block(b) for b in raw_blocks)
+    if not has_simplified:
+        return raw_blocks
+
+    expanded: List[Dict[str, Any]] = []
+    for block in raw_blocks:
+        if _is_simplified_block(block):
+            expanded.extend(_expand_simplified_block(block))
+        else:
+            expanded.append(block)
+    return expanded
+
+
 def _load_blocks_file(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     file_path = _safe_read_path(path, "--blocks-file")
     try:
@@ -521,7 +667,7 @@ def _load_blocks_file(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         raise CliError(f"--blocks-file is not valid JSON: {exc}") from exc
 
     if isinstance(parsed, list):
-        return parsed, {}
+        return _preprocess_blocks(parsed), {}
 
     if isinstance(parsed, dict):
         blocks = parsed.get("blocks")
@@ -531,7 +677,7 @@ def _load_blocks_file(path: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
                 fix="Use either a raw array of blocks, or an object with {\"blocks\": [...]}.",
             )
         meta = {k: v for k, v in parsed.items() if k != "blocks"}
-        return blocks, meta
+        return _preprocess_blocks(blocks), meta
 
     raise CliError(
         "--blocks-file JSON must be an array or object",
