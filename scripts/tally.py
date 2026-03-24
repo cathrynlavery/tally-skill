@@ -22,7 +22,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 API_BASE = "https://api.tally.so"
-API_VERSION = "2026-02-05"
+API_VERSION = "2025-05-30"
 MAX_RETRIES = 4
 MAX_ALL_PAGES = 200
 TRANSIENT_HTTP = {408, 425, 429, 500, 502, 503, 504}
@@ -272,6 +272,7 @@ def _request_with_retry(
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
             "tally-version": API_VERSION,
+            "User-Agent": "tally-skill/1.0",
         }
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -406,50 +407,49 @@ def _parse_simple_fields(raw: str) -> List[Tuple[str, str]]:
     return parsed
 
 
+def _safe_html_schema(text: str) -> List[Any]:
+    return [[text]]
+
+
 def _simple_question_blocks(label: str, field_type: str) -> List[Dict[str, Any]]:
-    group_uuid = str(uuid.uuid4())
+    block_type = FIELD_TYPE_TO_BLOCK[field_type]
+    question_group_uuid = str(uuid.uuid4())
 
-    question_block = {
+    title_block = {
         "uuid": str(uuid.uuid4()),
-        "type": "QUESTION",
-        "groupUuid": group_uuid,
+        "type": "TITLE",
+        "groupUuid": question_group_uuid,
         "groupType": "QUESTION",
-        "payload": {"isRequired": False},
-    }
-
-    label_block = {
-        "uuid": str(uuid.uuid4()),
-        "type": "LABEL",
-        "groupUuid": group_uuid,
-        "groupType": "QUESTION",
-        "payload": {"html": label},
+        "payload": {"safeHTMLSchema": _safe_html_schema(label)},
     }
 
     input_payload: Dict[str, Any] = {}
-    block_type = FIELD_TYPE_TO_BLOCK[field_type]
     if block_type == "RATING":
         input_payload = {"stars": 5}
 
     input_block = {
         "uuid": str(uuid.uuid4()),
         "type": block_type,
-        "groupUuid": group_uuid,
-        "groupType": "QUESTION",
+        "groupUuid": str(uuid.uuid4()),
+        "groupType": block_type,
         "payload": input_payload,
     }
 
-    return [question_block, label_block, input_block]
+    return [title_block, input_block]
 
 
 def _build_simple_form_blocks(name: str, fields: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
-    title_uuid = str(uuid.uuid4())
+    title_group_uuid = str(uuid.uuid4())
     blocks: List[Dict[str, Any]] = [
         {
-            "uuid": title_uuid,
+            "uuid": str(uuid.uuid4()),
             "type": "FORM_TITLE",
-            "groupUuid": title_uuid,
-            "groupType": "FORM_TITLE",
-            "payload": {"html": name},
+            "groupUuid": title_group_uuid,
+            "groupType": "TEXT",
+            "payload": {
+                "title": name,
+                "safeHTMLSchema": _safe_html_schema(name),
+            },
         }
     ]
 
