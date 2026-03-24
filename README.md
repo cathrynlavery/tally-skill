@@ -1,6 +1,6 @@
 # tally-skill
 
-Agent-first CLI for the [Tally.so](https://tally.so) REST API. Create forms, export submissions, manage webhooks — all from the command line with structured JSON output designed for AI agent chaining.
+Agent-first CLI for the [Tally](https://lttlmg.ht/tallyforms) REST API. Create forms, export submissions, manage webhooks — all from the command line with structured JSON output designed for AI agent chaining.
 
 **Zero dependencies.** Pure Python stdlib. Works with Claude Code, Codex, or any agent that can run shell commands.
 
@@ -23,7 +23,7 @@ python3 scripts/tally.py health
 
 ## Authentication
 
-Set your [Tally API key](https://tally.so/settings/api-keys) via environment variable:
+Set your [Tally API key](https://lttlmg.ht/tallyforms) via environment variable (generate one at Settings > API keys):
 
 ```bash
 export TALLY_API_KEY='tly-xxxx'
@@ -169,7 +169,7 @@ tally-skill/
 
 ## API Coverage
 
-Wraps the [Tally REST API](https://developers.tally.so/api-reference/introduction) (version `2026-02-05`):
+Wraps the [Tally REST API](https://developers.tally.so/api-reference/introduction) (version `2025-05-30`):
 
 - Users: `GET /users/me`
 - Forms: full CRUD + questions
